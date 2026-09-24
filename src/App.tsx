@@ -1,128 +1,113 @@
+import { useEffect, useMemo, useState } from "react";
 import "./styles.css";
+import type { RecordDraft, TrimRecord } from "./types";
+import {
+  allHorseIds,
+  historyOf,
+  loadRecords,
+  makeRecord,
+  reviewList,
+  saveRecords,
+  seedRecords,
+  shoeChanges,
+} from "./lib";
+import RecordForm from "./components/RecordForm";
+import ReviewPanel from "./components/ReviewPanel";
+import HorseList from "./components/HorseList";
+import HorseDetail from "./components/HorseDetail";
 
-const project = {
-  "sourceNo": 6,
-  "id": "hxyfront-62011",
-  "port": 62011,
-  "title": "马术蹄铁修整档案",
-  "domain": "马术蹄铁",
-  "prompt": "做一个面向马术俱乐部蹄铁师的修蹄记录前端项目，可以记录马匹编号、步态问题、蹄形评估、蹄铁类型、钉位、修蹄日期、下次复查日期和照片备注。页面需要有马匹列表、复查提醒、左右前后蹄对比记录、异常步态标记和蹄铁更换历史。",
-  "palette": [
-    "#78350f",
-    "#166534",
-    "#2563eb"
-  ],
-  "metrics": [
-    "待复查",
-    "异常步态",
-    "更换蹄铁",
-    "马匹档案"
-  ],
-  "filters": [
-    "前蹄",
-    "后蹄",
-    "运动马",
-    "休养马"
-  ],
-  "fields": [
-    "马匹编号",
-    "步态问题",
-    "蹄形评估",
-    "蹄铁类型",
-    "钉位",
-    "下次复查"
-  ],
-  "records": [
-    [
-      "HORSE-18",
-      "右前蹄外侧磨耗",
-      "铝蹄铁",
-      "14天后复查"
-    ],
-    [
-      "HORSE-27",
-      "后蹄裂纹",
-      "加护蹄垫",
-      "拍照归档"
-    ],
-    [
-      "HORSE-31",
-      "步态轻微不稳",
-      "需教练复核",
-      "已标记"
-    ]
-  ]
-};
+const SEED_FLAG = "farrier-seeded-v1";
 
-function App() {
+export default function App() {
+  const [records, setRecords] = useState<TrimRecord[]>(() => {
+    const loaded = loadRecords();
+    if (loaded.length > 0) return loaded;
+    if (localStorage.getItem(SEED_FLAG)) return [];
+    const seed = seedRecords();
+    localStorage.setItem(SEED_FLAG, "1");
+    saveRecords(seed);
+    return seed;
+  });
+  const [openHorse, setOpenHorse] = useState<string | null>(null);
+  const [toast, setToast] = useState<string>("");
+
+  // 重开浏览器后记录仍保留：任何变更都写入 localStorage
+  useEffect(() => {
+    saveRecords(records);
+  }, [records]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const reviews = useMemo(() => reviewList(records), [records]);
+  const pending = reviews.filter((i) => i.group !== "upcoming").length;
+  const abnormalHorses = useMemo(
+    () => allHorseIds(records).filter((id) => reviews.find((i) => i.record.horseId === id)?.abnormal.length).length,
+    [records, reviews]
+  );
+
+  const changedShoes = useMemo(() => {
+    let count = 0;
+    for (const id of allHorseIds(records)) {
+      const hist = historyOf(records, id);
+      for (let i = 1; i < hist.length; i++) count += shoeChanges(hist[i - 1], hist[i]).length;
+    }
+    return count;
+  }, [records]);
+
+  const handleSave = (draft: RecordDraft) => {
+    const rec = makeRecord(draft);
+    setRecords((rs) => [...rs, rec]);
+    setToast(`已保存 ${rec.horseId} 的修蹄记录，可在马匹列表打开详情`);
+  };
+
+  const detailHistory = openHorse ? historyOf(records, openHorse) : [];
+
   return (
     <main className="app">
       <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
+        <p>hxyfront-62011 · 马术蹄铁 · Port 62011</p>
+        <h1>马术蹄铁修整档案</h1>
+        <span>
+          四蹄并排建档：步态异常、蹄形评估、蹄铁类型与钉位一次记录；再修同蹄位自动带出上次结果，
+          仍异常转「持续观察」，恢复才回「正常」。蹄铁更换只追加不覆盖，复查逾期优先提醒。
+        </span>
       </section>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[28, 6, 14, 91][index] ?? 10}</strong>
-          </article>
-        ))}
+        <article>
+          <small>待复查（到期+逾期）</small>
+          <strong>{pending}</strong>
+        </article>
+        <article>
+          <small>异常/观察马匹</small>
+          <strong>{abnormalHorses}</strong>
+        </article>
+        <article>
+          <small>累计蹄铁更换</small>
+          <strong>{changedShoes}</strong>
+        </article>
+        <article>
+          <small>马匹档案</small>
+          <strong>{allHorseIds(records).length}</strong>
+        </article>
       </section>
 
       <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}分类</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
+        <ReviewPanel items={reviews} onOpen={setOpenHorse} />
+        <RecordForm records={records} onSave={handleSave} />
       </section>
 
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>近期记录</p>
-            <h2>工作台摘要</h2>
-          </div>
-          <button>导出CSV</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <HorseList records={records} onOpen={setOpenHorse} />
+
+      {openHorse && (
+        <HorseDetail horseId={openHorse} history={detailHistory} onClose={() => setOpenHorse(null)} />
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
     </main>
   );
 }
-
-export default App;
